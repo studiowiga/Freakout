@@ -304,6 +304,7 @@ FreakoutAudioProcessorEditor::FreakoutAudioProcessorEditor (FreakoutAudioProcess
       drySw (*p.apvts.getParameter ("dry")),
       foot (*p.apvts.getParameter ("active"), p.apvts.getRawParameterValue ("momentary"))
 {
+    setLookAndFeel (&lnf);
     background = ImageCache::getFromMemory (BinaryData::background_jpg, BinaryData::background_jpgSize);
     glowStrip  = ImageCache::getFromMemory (BinaryData::glow_strip_png, BinaryData::glow_strip_pngSize);
     const auto strip = ImageCache::getFromMemory (BinaryData::toggle_strip_png, BinaryData::toggle_strip_pngSize);
@@ -350,7 +351,7 @@ FreakoutAudioProcessorEditor::FreakoutAudioProcessorEditor (FreakoutAudioProcess
     startTimerHz (30);
 }
 
-FreakoutAudioProcessorEditor::~FreakoutAudioProcessorEditor() { stopTimer(); }
+FreakoutAudioProcessorEditor::~FreakoutAudioProcessorEditor() { stopTimer(); setLookAndFeel (nullptr); }
 
 //==============================================================================
 void FreakoutAudioProcessorEditor::setScaledHeight (int h)

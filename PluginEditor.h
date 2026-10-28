@@ -98,6 +98,20 @@ private:
 };
 
 //==============================================================================
+// poignee de redimensionnement discrete (traits gris fins, plus clairs au survol)
+struct FreakoutLookAndFeel : public juce::LookAndFeel_V4
+{
+    void drawCornerResizer (juce::Graphics& g, int w, int h, bool over, bool dragging) override
+    {
+        const float a = dragging ? 0.55f : (over ? 0.38f : 0.16f);
+        g.setColour (juce::Colours::white.withAlpha (a));
+        const float s = (float) juce::jmin (w, h);
+        for (float k : { 0.30f, 0.58f, 0.86f })
+            g.drawLine (s * (1.0f - k), s - 1.0f, s - 1.0f, s * (1.0f - k), 1.0f);
+    }
+};
+
+//==============================================================================
 class FreakoutAudioProcessorEditor : public juce::AudioProcessorEditor,
                                      private juce::Timer
 {
@@ -140,6 +154,7 @@ private:
     void drawDisplay (juce::Graphics&);
 
     FreakoutAudioProcessor& proc;
+    FreakoutLookAndFeel lnf;
 
     juce::Image background, bgScaled, glowStrip, glowScaled[5], fsDown, fsDownS;
     int cacheW = 0, cacheH = 0;

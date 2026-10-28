@@ -27,6 +27,126 @@ A = A0.copy()
 YY, XX = np.mgrid[0:H, 0:W].astype(np.float32)
 lum = lambda a: a.mean(-1)
 
+# ------------------------------------------------------------------ 0. vis des angles retirees (demande de l'utilisateur)
+# Le cadre grave (rainure sombre + arete claire cote lumiere) passe contre les vis : on refait le metal brosse
+# a leur place puis on redessine la rainure sur le meme trace (droites mesurees + conge de rayon 16 px).
+def _lin(p0, p1):
+    (a0, v0), (a1, v1) = p0, p1
+    return lambda u: v0 + (v1 - v0) * (u - a0) / (a1 - a0)
+FRAME_L = _lin((100, 176.48), (1000, 169.80))      # x du cadre gauche en fonction de y
+FRAME_R = _lin((100, 751.79), (1000, 757.69))
+FRAME_T = _lin((215, 67.02), (715, 67.85))         # y du cadre haut en fonction de x
+FRAME_B = _lin((215, 1035.74), (715, 1036.76))
+FRAME_RAD = 16.0
+SCREWS = [(187.0, 77.0), (743.0, 77.5)]
+
+def frame_groove(x, y, corner):
+    """distance signee au trace du cadre (px, positive vers l'exterieur) et normale exterieure, pres d'un coin"""
+    sx, sy = corner
+    left = sx < 400; top = sy < 500
+    xe = FRAME_L(y) if left else FRAME_R(y)          # bord vertical
+    ye = FRAME_T(x) if top else FRAME_B(x)           # bord horizontal
+    cxl = (FRAME_L(sy) + FRAME_RAD) if left else (FRAME_R(sy) - FRAME_RAD)
+    cyl = (FRAME_T(sx) + FRAME_RAD) if top else (FRAME_B(sx) - FRAME_RAD)
+    sxn = -1.0 if left else 1.0; syn = -1.0 if top else 1.0
+    in_arc = ((x - cxl) * sxn > 0) & ((y - cyl) * syn > 0)
+    dx_, dy_ = x - cxl, y - cyl
+    rr = np.hypot(dx_, dy_) + 1e-6
+    d_arc = rr - FRAME_RAD
+    nx_arc, ny_arc = dx_ / rr, dy_ / rr
+    # hors du quart de cercle : la droite la plus proche
+    dv = (x - xe) * sxn; dh = (y - ye) * syn
+    use_v = (y - cyl) * syn <= 0
+    d_lin = np.where(use_v, dv, dh)
+    nx_lin = np.where(use_v, sxn, 0.0); ny_lin = np.where(use_v, 0.0, syn)
+    d = np.where(in_arc, d_arc, d_lin)
+    nx = np.where(in_arc, nx_arc, nx_lin); ny = np.where(in_arc, ny_arc, ny_lin)
+    return d, nx, ny
+
+def remove_screws(img):
+    out = img.copy()
+    Lm = lum(img)
+    for (sx, sy) in SCREWS:
+        B = 34
+        x0, y0, x1, y1 = int(sx - B), int(sy - B), int(sx + B), int(sy + B)
+        yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+        reg = img[y0:y1, x0:x1].copy()
+        d, nx, ny = frame_groove(xx, yy, (sx, sy))
+        screw = np.hypot(xx - sx, yy - sy) < 13.5
+        line = (np.abs(d) < 3.2) & (np.hypot(xx - sx, yy - sy) < 20)
+        dark_panel = cv2.dilate(((Lm[y0:y1, x0:x1] < 70) & (np.hypot(xx - sx, yy - sy) > 12.5)).astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool) & ~line
+        hole = screw | line
+        # 1. basses frequences du metal : convolution normalisee sur le metal propre (ni vis, ni rainure, ni panneau noir)
+        keep = (~hole & ~dark_panel).astype(np.float32)
+        low = cv2.GaussianBlur(reg * keep[..., None], (0, 0), 4.0) / (cv2.GaussianBlur(keep, (0, 0), 4.0)[..., None] + 1e-4)
+        # 2. stries du brossage (horizontales) : prises sur la meme ligne, decalees, dans du metal propre
+        hf_full = np.clip(img - cv2.GaussianBlur(img, (0, 0), 2.5), -14, 14)
+        fill = low.copy()
+        ys, xs = np.where(hole)
+        for j, i in zip(ys, xs):
+            Y, X = y0 + j, x0 + i
+            side_t = d[j, i] < 0                                     # meme cote du cadre que le pixel a remplir
+            for dxs in (26, -26, 38, -38, 52, -52, 70, -70, 90, -90):
+                Xs = X + dxs
+                if 0 <= Xs < W and Lm[Y, Xs] > 110 and np.hypot(Xs - sx, Y - sy) > 15:
+                    ds, _, _ = frame_groove(np.float32(Xs), np.float32(Y), (sx, sy))
+                    if abs(ds) > 5.0 and ((ds < 0) == side_t or abs(d[j, i]) < 3.2):
+                        fill[j, i] = low[j, i] + hf_full[Y, Xs]
+                        break
+        metal = np.where(hole[..., None], fill, reg)
+        # 3. rainure du cadre redessinee : creux sombre + arete claire du cote tourne vers la lumiere (haut gauche)
+        lightness = (nx + ny) / math.sqrt(2.0)                       # > 0 : la face basse / droite de la rainure s'eclaire
+        side = np.sign(lightness + 1e-6)
+        tt = d * side
+        dark = 0.86 * np.exp(-((tt - 0.1) / 1.05) ** 2)
+        hi = 0.20 * np.abs(lightness) * np.exp(-((tt - 2.4) / 0.8) ** 2)
+        groove = metal * (1 - dark + hi)[..., None]
+        # zone remplacee : la vis et ses abords seulement, fondu doux -> le cadre d'origine reste ailleurs
+        w = np.clip((17.0 - np.hypot(xx - sx, yy - sy)) / 3.0, 0, 1)
+        w = w * (1 - cv2.GaussianBlur(dark_panel.astype(np.float32), (0, 0), 0.8))     # le coin du panneau noir reste intact
+        out[y0:y1, x0:x1] = reg * (1 - w[..., None]) + groove * w[..., None]
+    return out
+
+def rebuild_bottom_corner(img, sx, sy, dxs):
+    """coins du bas : le metal brosse interieur est repris tel quel sur les memes lignes (stries horizontales intactes),
+    decale de dxs vers l'interieur, avec correction de l'eclairage ; la rainure du cadre est redessinee en entier
+    autour du conge, avec le meme profil que le cadre d'origine (creux sombre, arete claire cote lumiere)."""
+    out = img.copy()
+    B = 44
+    x0, y0, x1, y1 = int(sx - B), int(sy - B), int(sx + B), int(sy + B)
+    yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+    reg = img[y0:y1, x0:x1].copy()
+    src = img[y0:y1, x0 + dxs:x1 + dxs].copy()
+    d, nx, ny = frame_groove(xx, yy, (sx, sy))
+    r = np.hypot(xx - sx, yy - sy)
+    # eclairage : basses frequences de la cible (metal interieur hors vis et rainure) et de la source
+    ok_t = ((d < -3.5) & (r > 14)).astype(np.float32)
+    lowT = cv2.GaussianBlur(reg * ok_t[..., None], (0, 0), 7) / (cv2.GaussianBlur(ok_t, (0, 0), 7)[..., None] + 1e-4)
+    lowS = cv2.GaussianBlur(src, (0, 0), 7)
+    inner = src + (lowT - lowS)
+    # metal exterieur (bande entre la rainure et le chanfrein) : la vis deborde a peine, reprise par inpainting
+    outer_hole = ((r < 13.5) & (d > -3.5)).astype(np.uint8)
+    outer = cv2.inpaint(np.clip(reg, 0, 255).astype(np.uint8), outer_hole, 3, cv2.INPAINT_TELEA).astype(np.float32)
+    t_in = np.clip((-d - 2.5) / 1.5, 0, 1)[..., None]           # 1 a l'interieur du cadre, 0 dehors
+    metal = inner * t_in + outer * (1 - t_in)
+    # rainure (profil mesure sur le cadre d'origine)
+    lightness = (nx + ny) / math.sqrt(2.0)
+    side = np.where(lightness >= 0, 1.0, -1.0)
+    tt = d * side
+    dark = 0.84 * np.exp(-((tt - 0.05) / 1.1) ** 2)
+    hi = 0.26 * np.clip(np.abs(lightness) * 1.6, 0, 1) * np.exp(-((tt - 2.3) / 0.85) ** 2)
+    groove = metal * (1 - dark + hi)[..., None]
+    # zone remplacee : disque autour du coin, fondu large ; le cadre d'origine reprend la main en dehors
+    w = np.clip((30.0 - r) / 8.0, 0, 1)[..., None]
+    out[y0:y1, x0:x1] = reg * (1 - w) + groove * w
+    return out
+
+A0 = remove_screws(A0)
+# coins du bas refaits plus proprement (texture brossee continue, rainure entiere)
+A0 = rebuild_bottom_corner(A0, 182.0, 1023.5, 64)
+A0 = rebuild_bottom_corner(A0, 743.5, 1025.0, -64)
+A = A0.copy()
+
 # ------------------------------------------------------------------ reperes mesures sur la photo (px)
 LED_X, LED_Y0, LED_DY = 279.6, 125.0, 45.85
 LEDS = [(LED_X, LED_Y0 + i * LED_DY) for i in range(9)]
