@@ -6,7 +6,7 @@ if(APPLE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
 endif()
 
-project(FreakOut VERSION 1.0.2)
+project(FreakOut VERSION 1.1.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,7 +40,7 @@ juce_add_plugin(FreakOut
   FORMATS VST3
   VST3_CATEGORIES Fx Generator
   PRODUCT_NAME "FreakOut"
-  VERSION 1.0.1
+  VERSION 1.1.0
   DESCRIPTION "Natural harmonic feedback generator (FreqOut style) - single pedal format"
   IS_SYNTH FALSE
   NEEDS_MIDI_INPUT TRUE

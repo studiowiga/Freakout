@@ -20,6 +20,7 @@ public:
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     float unitScale = 1.0f;                   // px par unite du repere 760 x 958
     int dragging = -1;                        // 0 = gain, 1 = onset
+    int rightZone = 0;                        // zone du dernier clic droit (0 = gain, 1 = onset) : MIDI Learn
     std::function<void()> onRightClick, onUserChange, onRepaintNeeded;
     std::function<void (int)> onTouched;      // ligne d'etat
     float valueOf (int i) const { return i == 0 ? gainV : onsetV; }
@@ -139,7 +140,9 @@ private:
     void useSoftwareRenderer();
     void visibilityChanged() override;
     void askRepaint (juce::Rectangle<int> r);
-    void showContextMenu();
+    void showContextMenu (int learnIdx = -1);     // learnIdx >= 0 : clic droit sur une commande (MIDI Learn en tete du menu)
+    void addMidiMenu (juce::PopupMenu& menu, int learnIdx);
+    void handleMidiMenu (int r);
     void showPresetMenu();
     void stepPreset (int delta);
     void rebuildCaches (float scale = 0.0f);
@@ -180,6 +183,10 @@ private:
     float lastValues[8];
     int lastPresetCounter = 0, lastMidiCount = 0, midiFlash = 0;
     int hoverZone = 0, drawnHover = -1;
+
+    // MIDI Learn : message dans l'afficheur (attente, puis « <Commande> = CC n » 2 s)
+    juce::String learnLine;
+    double learnLineUntil = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FreakoutAudioProcessorEditor)
 };

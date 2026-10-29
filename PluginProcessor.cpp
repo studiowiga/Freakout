@@ -31,6 +31,25 @@ const FreakoutPreset& FreakoutAudioProcessor::getFactoryPreset (int i)
     return factoryPresets[(size_t) jlimit (0, getNumFactoryPresets() - 1, i)];
 }
 
+const FreakoutAudioProcessor::LearnDef& FreakoutAudioProcessor::learnDef (int i)
+{
+    static const LearnDef defs[numLearn] =
+    {
+        { "gain",      "Gain",       ccGain,       learnContinuous, 0 },
+        { "onset",     "Onset",      ccOnset,      learnContinuous, 0 },
+        { "type",      "Type",       ccType,       learnSelector,   7 },   // 0..127 -> 7 positions
+        { "momentary", "Momentary",  ccMomentary,  learnToggle,     2 },   // >= 64 : ON
+        { "dry",       "Dry",        ccDry,        learnToggle,     2 },   // >= 64 : ON
+        { "active",    "Footswitch", ccFootswitch, learnFootswitch, 0 },
+    };
+    return defs[jlimit (0, numLearn - 1, i)];
+}
+
+void FreakoutAudioProcessor::resetMidiMap()
+{
+    for (int i = 0; i < numLearn; ++i) ccMap[i].store (learnDef (i).defaultCC);
+}
+
 //==============================================================================
 FreakoutAudioProcessor::FreakoutAudioProcessor()
     : AudioProcessor (BusesProperties()
@@ -40,6 +59,7 @@ FreakoutAudioProcessor::FreakoutAudioProcessor()
 {
     for (int i = 0; i < numRaw; ++i) rawPtr[i] = apvts.getRawParameterValue (rawIds[i]);
     for (int i = 0; i < numQueued; ++i) { pendingValue[i] = 0.0f; pendingSet[i] = false; }
+    resetMidiMap();
     startTimerHz (60);
 }
 
@@ -152,21 +172,47 @@ void FreakoutAudioProcessor::handleMidi (MidiBuffer& midi)
                 setParamFromAudio (k, target);
                 currentPreset = -1;
             };
-            if (cc == ccGain || cc == ccOnset)
+
+            // MIDI Learn : le premier CC recu est affecte a la commande visee (il n'agit pas sur le son)
+            const int lt = learnTarget.load();
+            if (lt >= 0 && lt < numLearn && cc < 120)
             {
-                const int k = cc - ccGain;
-                ramps[k].msb = v;
-                knobFromCC (k, (float) v / 127.0f);
+                for (int j = 0; j < numLearn; ++j)
+                    if (j != lt && ccMap[j].load() == cc) ccMap[j].store (-1);   // numero deja pris : l'autre commande est desassignee
+                ccMap[lt].store (cc);
+                if (lt < numKnobs) ramps[lt].msb = -1;
+                if (lt == 5) prevFsCC = v;
+                lastLearned.store (lt);
+                learnTarget.store (-1);
+                lastMidiCC = cc; ++midiCounter;
+                continue;
             }
-            else if (cc == ccGain + 32 || cc == ccOnset + 32)
+
+            int ctl = -1;
+            for (int j = 0; j < numLearn; ++j)
+                if (ccMap[j].load (std::memory_order_relaxed) == cc) { ctl = j; break; }
+            int lsbOf = -1;
+            if (ctl < 0)
+                for (int k = 0; k < numKnobs; ++k)
+                {
+                    const int msbCC = ccMap[k].load (std::memory_order_relaxed);
+                    if (msbCC >= 0 && msbCC < 32 && cc == msbCC + 32) { lsbOf = k; break; }
+                }
+
+            if (ctl >= 0 && ctl < numKnobs)
             {
-                const int k = cc - 32 - ccGain;
-                if (ramps[k].msb >= 0) knobFromCC (k, (float) (ramps[k].msb * 128 + v) / 16383.0f);
+                ramps[ctl].msb = v;
+                knobFromCC (ctl, (float) v / 127.0f);
             }
-            else if (cc == ccType)      { setParamFromAudio (2, (float) jlimit (0, 6, v * 7 / 128)); currentPreset = -1; }
-            else if (cc == ccMomentary) { setParamFromAudio (3, v >= 64 ? 1.0f : 0.0f); currentPreset = -1; }
-            else if (cc == ccDry)       { setParamFromAudio (4, v >= 64 ? 1.0f : 0.0f); currentPreset = -1; }
-            else if (cc == ccFootswitch)
+            else if (lsbOf >= 0)
+            {
+                // CC 14 bits (CC n + CC n+32) : resolution fine si la pedale l'envoie
+                if (ramps[lsbOf].msb >= 0) knobFromCC (lsbOf, (float) (ramps[lsbOf].msb * 128 + v) / 16383.0f);
+            }
+            else if (ctl == 2) { setParamFromAudio (2, (float) jlimit (0, 6, v * 7 / 128)); currentPreset = -1; }
+            else if (ctl == 3) { setParamFromAudio (3, v >= 64 ? 1.0f : 0.0f); currentPreset = -1; }
+            else if (ctl == 4) { setParamFromAudio (4, v >= 64 ? 1.0f : 0.0f); currentPreset = -1; }
+            else if (ctl == 5)
             {
                 // MOMENTARY ON : actif tant que le footswitch MIDI est enfonce ; sinon a accrochage ou bascule
                 const float cur = pendingSet[5].load() ? pendingValue[5].load() : rawAt (rActive);
@@ -315,6 +361,8 @@ void FreakoutAudioProcessor::getStateInformation (MemoryBlock& dest)
 {
     auto state = apvts.copyState();
     state.setProperty ("currentPreset", currentPreset.load(), nullptr);
+    for (int i = 0; i < numLearn; ++i)
+        state.setProperty (String ("cc_") + learnDef (i).id, ccMap[i].load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -325,6 +373,9 @@ void FreakoutAudioProcessor::setStateInformation (const void* data, int size)
         {
             auto state = ValueTree::fromXml (*xml);
             currentPreset = (int) state.getProperty ("currentPreset", 0);
+            // assignations MIDI Learn (ancien projet sans ces proprietes : numeros par defaut 20 a 25)
+            for (int i = 0; i < numLearn; ++i)
+                ccMap[i].store (jlimit (-1, 127, (int) state.getProperty (String ("cc_") + learnDef (i).id, learnDef (i).defaultCC)));
             apvts.replaceState (state);
             ++presetCounter;
         }

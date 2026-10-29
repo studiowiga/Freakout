@@ -97,6 +97,17 @@ public:
     static constexpr int numKnobs = 2;
     static const char* knobId (int i) { return i == 0 ? "gain" : "onset"; }
 
+    // v1.1 MIDI Learn : toutes les commandes de la facade (meme ordre que la file anti-gel queuedId)
+    // numeros par defaut = anciens CC fixes 20 a 25 (anciens projets et pedaliers inchanges)
+    enum LearnType { learnContinuous, learnToggle, learnSelector, learnFootswitch };
+    struct LearnDef { const char* id; const char* name; int defaultCC; int type; int positions; };
+    static constexpr int numLearn = 6;
+    static const LearnDef& learnDef (int i);
+    std::atomic<int> ccMap[numLearn];            // numero de CC de chaque commande, -1 = non assigne
+    std::atomic<int> learnTarget { -1 };         // commande en attente d'un CC (-1 = pas de learn)
+    std::atomic<int> lastLearned { -1 };         // derniere commande apprise (lue et remise a -1 par la fenetre)
+    void resetMidiMap();
+
 private:
     void handleMidi (juce::MidiBuffer& midi);
     void setParamFromAudio (int queueIndex, float plain);

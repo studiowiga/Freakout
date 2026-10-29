@@ -39,6 +39,11 @@ CC 20 Gain, CC 21 Onset (CC 52-53 en 14 bits), CC 22 Type, CC 23 Momentary, CC 2
 Program Change 1-13 = presets d'usine. Pédale d'expression : rampe sans saccade, course apprise automatiquement.
 MOMENTARY ON : le footswitch MIDI agit tant qu'il est enfoncé.
 
+**MIDI Learn (v1.1)** : clic droit sur une commande (chapeau GAIN, jupe ONSET, TYPE, MOMENTARY, DRY, footswitch)
+> « MIDI Learn: <commande> », puis bouger la pédale / appuyer sur le footswitch MIDI ; l'afficheur indique
+« MIDI LEARN: move a control for … » puis « <commande> = CC n ». « Clear MIDI » retire l'assignation,
+clic droit > MIDI map > « Reset MIDI to defaults » revient aux CC 20-25. Assignations sauvegardées avec le projet.
+
 ## Fenêtre
 
 Même taille par défaut qu'Echoflex (391 × 493), impossible de la réduire en dessous ; clic droit : taille
@@ -55,3 +60,4 @@ Captures réelles : `tools/render` (compile la vraie fenêtre sous Linux).
 Polices : Bebas Neue et Barlow Condensed (licence SIL OFL, `assets/fonts`).
 
 - v1.0.2 : menu de taille de fenêtre : « 60 % (default) », 75 %, 100 % (plus de taille en pixels)
+- v1.1.0 : MIDI Learn au clic droit sur chaque commande (Clear MIDI, assignations sauvegardées avec le projet)

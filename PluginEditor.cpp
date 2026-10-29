@@ -103,7 +103,7 @@ void ConcentricKnob::setV (int which, float v)
 
 void ConcentricKnob::mouseDown (const MouseEvent& e)
 {
-    if (e.mods.isPopupMenu()) { if (onRightClick) onRightClick(); return; }
+    if (e.mods.isPopupMenu()) { rightZone = zoneAt (e.position); if (onRightClick) onRightClick(); return; }
     dragging = zoneAt (e.position);
     startV = valueOf (dragging);
     if (dragging == 0) gainAtt.beginGesture(); else onsetAtt.beginGesture();
@@ -314,18 +314,20 @@ FreakoutAudioProcessorEditor::FreakoutAudioProcessorEditor (FreakoutAudioProcess
     boldFace  = Typeface::createSystemTypefaceFor (BinaryData::BarlowCondensedBold_ttf, BinaryData::BarlowCondensedBold_ttfSize);
 
     auto edited = [this] { proc.currentPreset = -1; };
-    range.onRightClick = [this] { showContextMenu(); };
+    // index des commandes = learnDef du processeur (0 Gain, 1 Onset, 2 Type, 3 Momentary, 4 Dry, 5 footswitch)
+    range.onRightClick = [this] { showContextMenu (range.rightZone == 1 ? 1 : 0); };
     range.onUserChange = edited;
     range.onTouched = [this] (int which) { lastChanged = which; showStatus(); };
-    typeKnob.onRightClick = [this] { showContextMenu(); };
+    typeKnob.onRightClick = [this] { showContextMenu (2); };
     typeKnob.onUserChange = edited;
     for (auto* l : { &momentarySw, &drySw })
     {
         l->strip = strip;
-        l->onRightClick = [this] { showContextMenu(); };
         l->onUserChange = edited;
     }
-    foot.onRightClick = [this] { showContextMenu(); };
+    momentarySw.onRightClick = [this] { showContextMenu (3); };
+    drySw.onRightClick       = [this] { showContextMenu (4); };
+    foot.onRightClick = [this] { showContextMenu (5); };
     foot.onPressChange = [this] { askRepaint (scaled (layout::footRect)); };
     range.onRepaintNeeded = [this] { askRepaint (scaled (Rectangle<float> (layout::skirtC.x - rangeHalf, layout::capC.y - rangeHalf - 6.0f, rangeHalf * 2.0f, rangeHalf * 2.0f + 16.0f))); };
     addAndMakeVisible (range);
@@ -533,8 +535,23 @@ void FreakoutAudioProcessorEditor::timerCallback()
     }
     const int pcount = proc.presetCounter.load();
     if (pcount != lastPresetCounter) { lastPresetCounter = pcount; numChanged = 0; }
-    if (numChanged == 1 && changed != 5) { lastChanged = changed; showStatus(); }
-    if (range.dragging >= 0) { lastChanged = range.dragging; showStatus(); }
+    if (numChanged == 1 && changed != 5) { lastChanged = changed; showStatus(); learnLineUntil = 0.0; }
+    if (range.dragging >= 0) { lastChanged = range.dragging; showStatus(); learnLineUntil = 0.0; }
+    // MIDI Learn : attente puis confirmation 2 s dans l'afficheur
+    const int lt = proc.learnTarget.load();
+    const int learned = proc.lastLearned.exchange (-1);
+    if (learned >= 0)
+    {
+        learnLine = String (FreakoutAudioProcessor::learnDef (learned).name) + " = CC " + String (proc.ccMap[learned].load());
+        learnLineUntil = now + 2000.0;
+        statusUntil = jmax (statusUntil, learnLineUntil);
+    }
+    else if (lt >= 0)
+    {
+        learnLine = "MIDI LEARN: move a control for " + String (FreakoutAudioProcessor::learnDef (lt).name);
+        learnLineUntil = now + 200.0;
+        statusUntil = jmax (statusUntil, now + 200.0);
+    }
     const int mc = proc.midiCounter.load();
     if (mc != lastMidiCount) { lastMidiCount = mc; midiFlash = 8; }
     if (midiFlash > 0) --midiFlash;
@@ -568,7 +585,8 @@ void FreakoutAudioProcessorEditor::timerCallback()
         askRepaint (scaled (layout::glowRect));
     }
 
-    const auto l1 = buildStatusLine(), info = buildInfoLine(), pl = buildPresetLine();
+    // (le message de learn reste pendant le fondu de sortie)
+    const auto l1 = (learnLineUntil > 0.0 && now < learnLineUntil + 800.0 ? learnLine : buildStatusLine()), info = buildInfoLine(), pl = buildPresetLine();
     const bool textChanged = l1 != lastLine1 || info != lastInfo;
     lastLine1 = l1; lastInfo = info;
     if (std::abs (statusAlpha - drawnStatus) > 0.003f || textChanged)
@@ -761,9 +779,33 @@ void FreakoutAudioProcessorEditor::showPresetMenu()
         });
 }
 
-void FreakoutAudioProcessorEditor::showContextMenu()
+void FreakoutAudioProcessorEditor::addMidiMenu (PopupMenu& menu, int learnIdx)
+{
+    if (learnIdx < 0 || learnIdx >= FreakoutAudioProcessor::numLearn)
+        return;
+    // clic droit sur une commande : MIDI Learn de cette commande en tete du menu
+    const int cc = proc.ccMap[learnIdx].load();
+    const int lt = proc.learnTarget.load();
+    const String name = FreakoutAudioProcessor::learnDef (learnIdx).name;
+    menu.addItem (1000 + learnIdx, "MIDI Learn: " + name + " (" + (cc >= 0 ? "CC " + String (cc) : String ("none")) + ")", true, lt == learnIdx);
+    menu.addItem (1100 + learnIdx, "Clear MIDI: " + name, cc >= 0);
+    if (lt >= 0) menu.addItem (1200, "Cancel MIDI learn");
+    menu.addSeparator();
+}
+
+void FreakoutAudioProcessorEditor::handleMidiMenu (int r)
+{
+    if (r >= 1000 && r < 1000 + FreakoutAudioProcessor::numLearn)
+        proc.learnTarget.store (proc.learnTarget.load() == r - 1000 ? -1 : r - 1000);   // re-cliquer annule
+    else if (r >= 1100 && r < 1100 + FreakoutAudioProcessor::numLearn) proc.ccMap[r - 1100].store (-1);
+    else if (r == 1200) proc.learnTarget.store (-1);
+    else if (r == 1201) { proc.learnTarget.store (-1); proc.resetMidiMap(); }
+}
+
+void FreakoutAudioProcessorEditor::showContextMenu (int learnIdx)
 {
     PopupMenu menu, sizes;
+    addMidiMenu (menu, learnIdx);
     const int defaultW = roundToInt ((float) defaultH * (float) baseW / (float) baseH);
     sizes.addItem (1, "60 % (default)", true, getHeight() == defaultH);
     sizes.addItem (2, "75 %",  true, getHeight() == roundToInt (baseH * 0.75f));
@@ -800,13 +842,19 @@ void FreakoutAudioProcessorEditor::showContextMenu()
     menu.addSubMenu ("Settings", settings);
 
     PopupMenu midi;
-    midi.addItem (900, "CC 20  Gain", false);
-    midi.addItem (901, "CC 21  Onset", false);
-    midi.addItem (902, "CC 22  Type (7 zones)", false);
-    midi.addItem (903, "CC 23  Momentary (64+ on)", false);
-    midi.addItem (904, "CC 24  Dry (64+ on)", false);
-    midi.addItem (905, "CC 25  Footswitch", false);
-    midi.addItem (906, "CC 52-53  fine (14-bit) for CC 20-21", false);
+    for (int i = 0; i < FreakoutAudioProcessor::numLearn; ++i)
+    {
+        const int cc = proc.ccMap[i].load();
+        midi.addItem (1000 + i, "Learn: " + String (FreakoutAudioProcessor::learnDef (i).name)
+                                 + " (" + (cc >= 0 ? "CC " + String (cc) : String ("none")) + ")",
+                      true, proc.learnTarget.load() == i);
+    }
+    midi.addSeparator();
+    if (proc.learnTarget.load() >= 0) midi.addItem (1200, "Cancel MIDI learn");
+    midi.addItem (1201, "Reset MIDI to defaults (CC 20-25)");
+    midi.addSeparator();
+    midi.addItem (902, "Type: 7 zones / Momentary, Dry: 64+ on", false);
+    midi.addItem (906, "CC n+32 = fine (14-bit) for knobs on CC 0-31", false);
     midi.addItem (907, "Program Change 1-13  Factory presets", false);
     menu.addSubMenu ("MIDI map", midi);
     menu.addSeparator();
@@ -827,5 +875,6 @@ void FreakoutAudioProcessorEditor::showContextMenu()
             else if (r >= 100 && r < 200) pr.applyFactoryPreset (r - 100);
             else if (r > 200 && r < 300)  pr.loadUserPreset (r - 200);
             else if (r > 300 && r < 400)  pr.saveUserPreset (r - 300);
+            else if (r >= 1000) ed.handleMidiMenu (r);
         });
 }
