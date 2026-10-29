@@ -765,7 +765,7 @@ void FreakoutAudioProcessorEditor::showContextMenu()
 {
     PopupMenu menu, sizes;
     const int defaultW = roundToInt ((float) defaultH * (float) baseW / (float) baseH);
-    sizes.addItem (1, "Default (" + String (defaultW) + " x " + String (defaultH) + ")", true, getHeight() == defaultH);
+    sizes.addItem (1, "60 % (default)", true, getHeight() == defaultH);
     sizes.addItem (2, "75 %",  true, getHeight() == roundToInt (baseH * 0.75f));
     sizes.addItem (3, "100 %", true, getHeight() == baseH);
     menu.addSubMenu ("Window size", sizes);

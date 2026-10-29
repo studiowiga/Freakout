@@ -53,3 +53,5 @@ JUCE 8.0.15 + CMake ; GitHub Actions (`windows-2022`, `macos-14`) produit les VS
 Visuel : `python3 tools/controls_art.py` puis `python3 tools/make_background.py` (génère aussi `Layout.h`).
 Captures réelles : `tools/render` (compile la vraie fenêtre sous Linux).
 Polices : Bebas Neue et Barlow Condensed (licence SIL OFL, `assets/fonts`).
+
+- v1.0.2 : menu de taille de fenêtre : « 60 % (default) », 75 %, 100 % (plus de taille en pixels)
